@@ -1,4 +1,93 @@
 
+
+
+# reproduction de "ASSESSED VALUE OF HOUSEHOLD AND KITCHEN FURNITURE"
+# par W.E.B. du Bois
+# source : https://www.loc.gov/pictures/item/2013650445/
+library(tidyverse)
+
+# your dataframe must have this structure
+df <- tribble(~cat, ~nombre,
+              "1900",200,
+              "1901",1200,
+              "1903",1400,
+              "1905",6500,
+              "1906",7500,
+              "1907",9000)
+
+#n_recouvrement : number of loops
+
+spiro_dubois <- function(df,n_recouvrement=2) {
+  tmp <- df
+  couleurs <- c("#FFCDCB","#989EB4","#b08c71","#FFC942","#EFDECC","#F02C49") # add more colors if you have more than 6 rows
+  tmp <- tmp %>% mutate(couleur = couleurs[row_number()])
+  nombre_lignes <- nrow(df)
+  if (nombre_lignes>6) {print("nrow(df)>6 !!")}
+  decalage <- 3*nombre_lignes+2
+  tmp <- tmp %>% mutate(y_zero = (decalage+nombre_lignes) - row_number())
+  tmp <- tmp %>% mutate(valeur = scales::dollar(nombre))
+  tmp$taille_nombre <- nchar(tmp$valeur)
+  tmp <- tmp %>% group_by(cat) %>% mutate(separateur = paste0(rep("_",8-taille_nombre),collapse=""))
+  tmp <- tmp %>% mutate(label = paste(cat,separateur,valeur))
+  
+  pente <- (min(tmp$y_zero)-nombre_lignes) / max(tmp$nombre)
+  tmp <- tmp %>% mutate(y_final = y_zero - nombre*pente)
+  positions <- tmp %>% mutate(x_1=0, x_2=nombre, x_3=nombre, x_4=0,
+                                          y_1=y_zero, y_2=y_final, y_3=y_final+1, y_4=y_zero+1) %>%
+    select(cat,x_1:y_4) %>%
+    pivot_longer(cols=-cat,
+                 names_sep="_",
+                 names_to=c("coord","rang")) %>%
+    pivot_wider(names_from = "coord", values_from=value)
+  positions <- positions %>% left_join(tmp %>% select(cat,label,couleur),by="cat")
+  recouvrement <- max(tmp$nombre)/n_recouvrement
+  position_caption <- max(tmp$y_zero)
+  p <- ggplot(positions, aes(x = x, y = y, group=cat)) +
+    geom_polygon(aes(group=cat, fill=I(couleur)),color="black") +
+    scale_y_continuous(expand=expansion(add=c(11,-5))) +
+    scale_x_continuous(expand=expansion(add=c(0,-recouvrement))) +
+    coord_polar() +
+    geom_text(data = . %>% filter(rang==1),
+              aes(label = paste(label,"   ",sep="")),
+              adj=1, nudge_y=.5, nudge_x = -0000, color="black",size=3,family="Courier") +
+    theme_void() +
+
+    theme(legend.position="none",
+          text = element_text(family="Courier"),
+          plot.title = element_text(face = "bold"),
+          plot.background = element_rect(fill="#e9d9c9aa", color="#FFFFFF00"),
+          plot.margin = margin(c(0,0,0,0))) +
+    labs(title = "titre",
+         caption = "Du Bois by Coulmont")
+  p
+}
+
+
+spiro_dubois(df,n_recouvrement=3)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # reproduction de "ASSESSED VALUE OF HOUSEHOLD AND KITCHEN FURNITURE"
 # par W.E.B. du Bois
 # source : https://www.loc.gov/pictures/item/2013650445/
