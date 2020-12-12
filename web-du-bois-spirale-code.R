@@ -4,9 +4,12 @@
 # reproduction de "ASSESSED VALUE OF HOUSEHOLD AND KITCHEN FURNITURE"
 # par W.E.B. du Bois
 # source : https://www.loc.gov/pictures/item/2013650445/
+# 
+# function : spiro_dubois()
+
 library(tidyverse)
 
-# your dataframe must have this structure
+# your dataframe must be structured thusly :
 df <- tribble(~cat, ~nombre,
               "1900",200,
               "1901",1200,
@@ -15,25 +18,32 @@ df <- tribble(~cat, ~nombre,
               "1906",7500,
               "1907",9000)
 
-#n_recouvrement : number of loops
+# df <- tribble(~cat, ~nombre,
+#               "1900",8350,
+#               "1901",8300,
+#               "1903",8400,
+#               "1905",8600,
+#               "1906",8800,
+#               "1907",9000)
 
-spiro_dubois <- function(df,n_recouvrement=2) {
+#n_recouvrement : number of loops (lower number -> more loops)
+
+spiro_dubois <- function(df,n_recouvrement=2.3,titre_graphique="Titre du graphique") {
   tmp <- df
-  couleurs <- c("#FFCDCB","#989EB4","#b08c71","#FFC942","#EFDECC","#F02C49") # add more colors if you have more than 6 rows
+  couleurs <- c("#FFCDCB","#989EB4","#b08c71","#FFC942","#EFDECC","#F02C49","#354733","darkorange2","#101010") # add more colors if you have more than 6 rows
   tmp <- tmp %>% mutate(couleur = couleurs[row_number()])
   nombre_lignes <- nrow(df)
-  if (nombre_lignes>6) {print("nrow(df)>6 !!")}
+  if (nombre_lignes>8) {print("nrow(df)>8 PROBLEM : ADD COLOR !!")}
   decalage <- 3*nombre_lignes+2
-  tmp <- tmp %>% mutate(y_zero = (decalage+nombre_lignes) - row_number())
+  tmp <- tmp %>% mutate(y_zero = (decalage+nombre_lignes) - row_number()-1)
   tmp <- tmp %>% mutate(valeur = scales::dollar(nombre))
   tmp$taille_nombre <- nchar(tmp$valeur)
   tmp <- tmp %>% group_by(cat) %>% mutate(separateur = paste0(rep("_",8-taille_nombre),collapse=""))
-  tmp <- tmp %>% mutate(label = paste(cat,separateur,valeur))
-  
+  tmp <- tmp %>% mutate(label = paste(cat,separateur,valeur,"  "))
   pente <- (min(tmp$y_zero)-nombre_lignes) / max(tmp$nombre)
   tmp <- tmp %>% mutate(y_final = y_zero - nombre*pente)
   positions <- tmp %>% mutate(x_1=0, x_2=nombre, x_3=nombre, x_4=0,
-                                          y_1=y_zero, y_2=y_final, y_3=y_final+1, y_4=y_zero+1) %>%
+                              y_1=y_zero, y_2=y_final, y_3=y_final+1, y_4=y_zero+1) %>%
     select(cat,x_1:y_4) %>%
     pivot_longer(cols=-cat,
                  names_sep="_",
@@ -41,29 +51,31 @@ spiro_dubois <- function(df,n_recouvrement=2) {
     pivot_wider(names_from = "coord", values_from=value)
   positions <- positions %>% left_join(tmp %>% select(cat,label,couleur),by="cat")
   recouvrement <- max(tmp$nombre)/n_recouvrement
-  position_caption <- max(tmp$y_zero)
+  position_caption <- min(tmp$y_zero) + 3
+  
   p <- ggplot(positions, aes(x = x, y = y, group=cat)) +
     geom_polygon(aes(group=cat, fill=I(couleur)),color="black") +
     scale_y_continuous(expand=expansion(add=c(11,-5))) +
     scale_x_continuous(expand=expansion(add=c(0,-recouvrement))) +
     coord_polar() +
     geom_text(data = . %>% filter(rang==1),
-              aes(label = paste(label,"   ",sep="")),
+              aes(label = label),
               adj=1, nudge_y=.5, nudge_x = -0000, color="black",size=3,family="Courier") +
     theme_void() +
-
+    annotate(geom="text",label="Du Bois by Coulmont",
+             y=position_caption,x = ((max(tmp$nombre)-recouvrement))/2.1 ,
+             family="Courier") +
     theme(legend.position="none",
           text = element_text(family="Courier"),
-          plot.title = element_text(face = "bold"),
+          plot.title = element_text(face = "bold", hjust = 0.55),
           plot.background = element_rect(fill="#e9d9c9aa", color="#FFFFFF00"),
-          plot.margin = margin(c(0,0,0,0))) +
-    labs(title = "titre",
-         caption = "Du Bois by Coulmont")
+          plot.margin = margin(c(0,0,-10,-30))) +
+    labs(title = titre_graphique) # peut-être regarder ggalt::annotate_textp : non ne fonctionne qu'avec coordonnees cartesiennes
   p
 }
 
 
-spiro_dubois(df,n_recouvrement=3)
+spiro_dubois(df,n_recouvrement=2.1)
 
 
 
@@ -82,7 +94,8 @@ spiro_dubois(df,n_recouvrement=3)
 
 
 
-
+# draft code :
+# -------------------------------------------------------------------
 
 
 
