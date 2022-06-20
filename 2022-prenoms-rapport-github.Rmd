@@ -1,0 +1,1160 @@
+---
+title: "Les prénoms en `r format(Sys.time(), '%Y')`"
+subtitle: "Une exploration graphique du *Fichier des prénoms*"
+author: "Baptiste Coulmont"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    template: eisvogel.tex
+    keep_tex: true
+titlepage: true
+titlepage-color: "435488"
+titlepage-text-color: "FFFFFF"
+disable-header-and-footer: true
+logo: "logo.pdf"
+logo-width: 200
+lang: fr-FR
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, warning = FALSE, message = FALSE, fig.width=12, fig.height = 8, dpi=300)
+
+
+# Fichier des prénoms, édition 2021 (jusqu'en 2020)
+library(tidyverse)
+library(stringi)
+library(scales)
+library(hrbrthemes)
+library(glue)
+library(lubridate)
+library(ggrepel)
+library(glue)
+library(knitr)
+library(kableExtra)
+library(sf)
+# install.packages("devtools")
+#devtools::install_github("yutannihilation/ggsflabel")
+library(ggsflabel)
+#
+
+fpn <- read_csv2("data/prenoms_2022/nat2021.csv", locale=locale(encoding = "utf8"), na="" )
+
+
+fpd <- read_csv2("data/prenoms_2022/dpt2021.csv", locale=locale(encoding = "utf8"), na="" )
+
+# il faut ensuite enlever tous les caractères accentués
+fpn <- fpn %>% mutate(preusuel = stri_trans_general(preusuel, "Latin-ASCII"))
+
+# probleme des prénoms accentués : faire la somme
+fpn <- fpn %>% group_by(sexe,annais,preusuel) %>%
+  summarize(nombre = sum(nombre))
+
+fpn <- fpn %>% mutate(taille=nchar(preusuel)) # taille des prénoms
+
+# déterminer le rang des prénoms, en ne considérant pas les _PRENOMS_RARES
+# rang par sexe
+fpn <- fpn %>%  mutate(type= (preusuel=="_PRENOMS_RARES")) %>%
+  group_by(type,annais,sexe) %>%
+  mutate(rang = rank(-nombre,ties.method = "random") ) %>%
+  ungroup() %>%
+  mutate( rang = case_when(preusuel=="_PRENOMS_RARES" ~ as.integer(25000),
+                           TRUE ~ rang ) ) %>%
+  group_by(annais,sexe) %>% arrange(rang) %>%
+  mutate(somme_cum=cumsum(nombre),   # somme cumulée)
+         total_cum=sum(nombre)) %>%
+  mutate(p_cum=somme_cum/total_cum,
+         p=nombre/sum(nombre)) %>%
+  ungroup()
+
+# rang pour les 2 sexes
+fpn <- fpn %>%  mutate(type= (preusuel=="_PRENOMS_RARES")) %>%
+  group_by(type,annais) %>%
+  mutate(rang2s = rank(-nombre,ties.method = "random") ) %>%
+  ungroup() %>%
+  mutate( rang2s = case_when(preusuel=="_PRENOMS_RARES" ~ as.integer(25000),
+                             TRUE ~ rang2s ) ) %>%
+  group_by(annais) %>% arrange(rang2s) %>% #### ATTENTION c'est la somme cumulée à partir du rang
+  mutate(somme_cum2s=cumsum(nombre),   # somme cumulée)
+         total_cum2s=sum(nombre)) %>%
+  mutate(p_cum2s=somme_cum2s/total_cum2s,
+         p2s=nombre/sum(nombre)) %>%
+  ungroup()
+
+
+fpn$annais <- as.numeric(as.character(fpn$annais))
+
+annee_max <- max(fpn$annais,na.rm=T)
+
+# Fichier départemental
+
+# problème d'encodage :
+fpd <- fpd %>% mutate(preusuel = stri_trans_general(preusuel, "Latin-ASCII"))
+fpd$annais <- as.numeric(as.character(fpd$annais))
+# probleme des prénoms accentués : faire la somme
+fpd <- fpd %>% group_by(dpt,sexe,annais,preusuel) %>%
+  summarize(nombre = sum(nombre))
+
+# fonds de carte département placement dom et idf
+load("departements_dom_ign.RData")
+```
+
+# Introduction
+
+Chaque année depuis quelques temps maintenant, l'Insee publie le *Fichier des prénoms* en *open data*. Ce fichier très riche contient, en `r annee_max+1`, `r format(length(unique(fpn$preusuel)), nsmall=1, big.mark=" ")` prénoms différents. Il indique, pour chaque année depuis 1900, le nombre de bébés ayant reçu tel ou tel prénom (en différenciant par sexe). Il existe un fichier national et un fichier départemental. Dans le détail, les choses sont un peu plus complexes et il est important, pour ne pas faire de bêtises, de consulter la description du fichier faite par l'Insee.
+
+Le document qui suit propose quelques graphiques de synthèse qui montrent comment les tendances récentes s'inscrivent dans des évolutions plus longues.
+
+Pour en savoir plus, vous pouvez consulter [coulmont.com/](https://coulmont.com/prenoms) ou un petit livre de synthèse, *Sociologie des prénoms* (Paris, Éditions la Découverte, 2022).
+
+
+
+\newpage 
+
+# Le palmarès des prénoms en `r annee_max`, en `r annee_max-10` et en `r annee_max-20`
+
+```{r}
+prop <- fpn %>% 
+  filter(annais==annee_max & sexe==2 & rang==1) %>% 
+  mutate(p = 100 - 100*p) %>%
+  select(p) %>% round(digits=1) %>% as.numeric() %>%
+  format(decimal.mark=",")
+```
+
+En `r annee_max`, le prénom le plus donné aux filles était `r fpn %>% filter(annais==annee_max & sexe==2 & rang==1) %>% select(preusuel) %>% as.character() %>% str_to_title()`, avec `r fpn %>% filter(annais==annee_max & sexe==2 & rang==1) %>% select(nombre) %>% as.numeric() %>% format(big.mark=" ")` naissances, c'est à dire `r fpn %>% filter(annais==annee_max & sexe==2 & rang==1) %>% select(p) %>% round(digits=4) %>% as.numeric() %>% "*"(100 ) %>% format(decimal.mark=",")`% des naissances féminines. Dit autrement, `r prop`% des bébés filles de 2020 *n'ont pas reçu* le prénom le plus donné.
+
+\
+
+```{r}
+
+top_annee_max <- fpn %>% 
+  filter(annais == annee_max & rang<21) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  mutate(nombre = format(nombre,big.mark=" ")) %>%
+  select(sexe,preusuel,nombre,rang) %>%
+  mutate(prenom_nombre = paste(preusuel," (",nombre,")",sep="")) %>%
+  select(Rang = rang,sexe,prenom_nombre) %>%
+  pivot_wider(names_from = sexe,values_from = prenom_nombre) %>%
+  select(Rang,Garçons,Filles)
+
+top_annee_max_10 <- fpn %>% 
+  filter(annais == (annee_max-10) & rang<21) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+    mutate(nombre = format(nombre,big.mark=" ")) %>%
+    mutate(nombre = str_remove_all(nombre,"^ ")) %>%
+  select(sexe,preusuel,nombre,rang) %>%
+  mutate(prenom_nombre = paste(preusuel," (",nombre,")",sep="")) %>%
+  
+  select(Rang = rang,sexe,prenom_nombre) %>%
+  pivot_wider(names_from = sexe,values_from = prenom_nombre) %>%
+  select(Rang,Garçons,Filles)
+
+top_annee_max_20 <- fpn %>% 
+  filter(annais == (annee_max-20) & rang<21) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  mutate(nombre = format(nombre,big.mark=" ")) %>%
+  mutate(nombre = str_remove_all(nombre,"^ ")) %>%
+  select(sexe,preusuel,nombre,rang) %>%
+  mutate(prenom_nombre = paste(preusuel," (",nombre,")",sep="")) %>%
+  select(Rang = rang,sexe,prenom_nombre) %>%
+  pivot_wider(names_from = sexe,values_from = prenom_nombre) %>%
+  select(Rang,Garçons,Filles)
+
+
+
+
+top_annee_max %>%
+  left_join(top_annee_max_10,by="Rang") %>%
+  left_join(top_annee_max_20,by="Rang") %>%
+  kbl(booktabs="T",col.names = c("Rang","Garçons","Filles","Garçons","Filles","Garçons","Filles")) %>%
+  add_header_above( c(" ", 
+                      "Cette année" = 2,
+                      "Dix ans avant" = 2, 
+                      "Vingt ans avant" = 2)) %>%
+  kable_styling(latex_options = c("striped","HOLD_position"), font_size = 8,position = "center") %>%
+  footnote(general = glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}"),
+           general_title = "Note : ",footnote_as_chunk = T)
+  
+
+```
+
+\newpage
+
+# Des prénoms moins fréquents
+
+Avec les cinquante prénoms les plus fréquents (le « top 50 ») il était possible de nommer 75% des bébés en 1900 comme en 1960... Mais aujourd'hui, ces prénoms fréquents ne servent qu'à un petit tiers des bébés : les prénoms sont plus variés et le prénom le plus populaire ne dépasse pas 1 à 2% des naissances.
+
+\
+
+```{r, fig.width = 8, fig.height=6}
+
+fpn %>%
+  filter(rang==50) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  ggplot(aes(annais,p_cum, group=sexe, color=sexe)) +
+  geom_line(size=2,   lineend = "round",
+  linejoin = "round") +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1)) +
+  scale_x_continuous(expand=expansion(add=c(1,7))) +
+  scale_color_manual(values = c("firebrick1","dodgerblue")) +
+ labs(y=NULL,x=NULL,title = "Part des naissances couvertes par les cinquante prénoms les plus fréquents",
+       color = NULL,
+       caption = glue("Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont")) +
+  theme_ipsum( plot_margin = margin(0, 5, 0, 0),
+               plot_title_size = 15,
+               subtitle_size = 12,
+               base_size = 12,
+               axis_title_size = 12,
+               axis_text_size = 12,
+               base_family = "Helvetica")  +
+  theme(legend.position=c(.1,.6),
+        plot.caption = element_text(size=12),
+        plot.title.position ="plot",
+        strip.text = element_blank(),
+        panel.spacing.x = unit(0.05, "lines"),
+        panel.spacing.y = unit(0.3, "lines")) 
+  
+
+
+```
+
+
+\newpage
+
+# Le renouvellement du prénom le plus populaire
+
+```{r}
+premiere_place <- fpn %>%
+  filter(!is.na(annais)) %>%
+  filter(rang==1) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  select(sexe,annais,preusuel) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  group_by(sexe,preusuel) %>%
+  mutate(annee_moyenne = mean(annais)) %>%
+  group_by(sexe) %>%
+  mutate(position_y = fct_reorder(preusuel, -annee_moyenne, .fun = mean )) %>%
+  ungroup()
+
+n_prenoms_top_1 <- premiere_place %>% 
+  group_by(sexe) %>%
+  summarize(n_prenoms_diff = length(unique(preusuel)))
+
+```
+
+Entre 1900 et le milieu des années 1950, Marie et Jean étaient les prénoms les plus fréquemment donnés aux bébés. Depuis le milieu du [xx]{.smallcaps}^e^ siècle, cette première place a été occupée par de nombreux prénoms différents, de Martine à Jade et Louise pour les filles. La rotation est plus rapide pour les prénoms féminins : `r n_prenoms_top_1 %>% filter(sexe == "Filles") %>% select(n_prenoms_diff) %>% as.numeric() ` prénoms féminins différents ont occupé la première place, alors que seulement `r n_prenoms_top_1 %>% filter(sexe == "Garçons") %>% select(n_prenoms_diff) %>% as.numeric() ` prénoms masculins l'ont occupée.
+
+\
+
+```{r fig.width=8,fig.height=5}
+
+premiere_place %>% 
+#  mutate(position_y = rank(annee_moyenne)) %>%
+  ggplot(aes(annais,position_y,fill=preusuel,color=preusuel)) +
+  geom_tile() +
+  scale_x_continuous(expand=expansion(add=c(1,10))) +
+  facet_wrap(~sexe,scales = "free_y") +
+  labs(y=NULL,x=NULL,
+       title = "Prénom le plus donné",
+       subtitle = "En 1955, Martine fut le prénom le plus donné aux bébés filles.",
+       color = NULL,
+       caption = glue("Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont")) +
+  theme_ipsum( plot_margin = margin(0, 5, 0, 0),
+               plot_title_size = 20,
+               subtitle_size = 12,
+               base_size = 12,
+               axis_title_size = 12,
+               axis_text_size = 12,
+               base_family = "Helvetica")  +
+  theme(legend.position="none",
+        plot.title.position ="plot",
+        strip.text = element_blank(),
+        panel.spacing.x = unit(0.05, "lines"),
+        panel.spacing.y = unit(0.3, "lines")) 
+```
+
+\newpage
+
+# Les prénoms mixtes
+
+Avoir un prénom mixte (ou épicène), ça recouvre deux situations bien différentes. C'est peut-être avoir un prénom connu comme un prénom mixte (Camille, Claude, Alix ou Dominique) : mais ces prénoms ne nomment qu'une toute petite partie des enfants. C'est donc une expérience rare. Mais -- deuxième situation -- c'est peut-être avoir un prénom donné 99 fois sur 100 à des garçons, et 1 fois sur 100 à des filles (ou l'inverse). Et cette situation est plus fréquente: il suffit de quelques personnes pour produire du «trouble dans le genre». 
+
+\
+
+```{r figmixte1, fig.width=9, fig.height=7}
+
+
+
+
+# proportion des naissances couvertes par les moms mixtes
+# --------------------------------------------------------
+
+mixtes <- fpn %>%
+  select(annais,preusuel,sexe,nombre) %>%
+  arrange(annais,preusuel,sexe) %>%
+  complete(annais,preusuel,sexe,fill = list(nombre = 0)) %>%
+  group_by(annais,preusuel) %>%
+  mutate(total_prenom_annuel = sum(nombre)) %>%
+  filter(total_prenom_annuel>0) %>%
+  select(-total_prenom_annuel)
+  
+  
+mixtes <- mixtes %>% 
+  group_by(annais,preusuel) %>%
+  mutate(fm = first(nombre)/(first(nombre)+last(nombre))) %>%
+  mutate(epicene = ifelse(fm>.1&fm<.9&preusuel !="_PRENOMS_RARES", "oui","non"))
+
+
+# 
+# mixtes %>%
+#   group_by(annais) %>%
+#   summarize(epicenes = weighted.mean(epicene=="oui",nombre)) %>%
+#   filter(!is.na(annais)) %>%
+#   ggplot(aes(annais,epicenes)) + geom_point()
+
+
+
+mixtes <- mixtes %>% 
+  group_by(preusuel) %>%
+  mutate(fm = sum(nombre[sexe==1])/(sum(nombre))) %>%
+  mutate(epicene_01 = ifelse(fm>.01&fm<.99&preusuel !="_PRENOMS_RARES", "oui","non"),
+         epicene_05 = ifelse(fm>.05&fm<.95&preusuel !="_PRENOMS_RARES", "oui","non"),
+         epicene_10 = ifelse(fm>.1&fm<.90&preusuel !="_PRENOMS_RARES", "oui","non"),
+         epicene_20 = ifelse(fm>.2&fm<.8&preusuel !="_PRENOMS_RARES", "oui","non"),
+         epicene_30 = ifelse(fm>.3&fm<.7&preusuel !="_PRENOMS_RARES", "oui","non"),
+         epicene_40 = ifelse(fm>.4&fm<.6&preusuel !="_PRENOMS_RARES", "oui","non"))
+
+mixte_plot <- mixtes %>%
+  select(-epicene) %>%
+  pivot_longer(-c(annais,preusuel,sexe,nombre,fm)) %>%
+  filter(!(annais<1946&name=="epicene_01")) %>%
+  group_by(annais,name) %>%
+  summarize(epicenes = weighted.mean(value=="oui",nombre,na.rm=TRUE)) %>%
+  filter(!is.na(annais))
+
+mixte_plot %>%
+  ungroup() %>%
+  mutate(name = case_when(name == "epicene_01" ~ "Au moins  1%",
+                          name == "epicene_05" ~ "Au moins  5%",
+                          name == "epicene_10" ~ "Au moins 10%",
+                          name == "epicene_20" ~ "Au moins 20%",
+                          name == "epicene_30" ~ "Au moins 30%",
+                          name == "epicene_40" ~ "Au moins 40%")) %>%
+  ggplot(aes(annais,epicenes,group=name,color=name)) + 
+  annotate(geom="label",x=1990,y=.11,adj=0,
+           label=glue("En {annee_max}, près d'un enfant sur 8\nreçoit un prénom « mini-mixte »\nc'est à dire porté par des enfants\nde l'autre sexe")) +
+  
+  geom_line() +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1)) +
+  scale_x_continuous(expand=expansion(add=c(1,7))) +
+ labs(y=NULL,x=NULL,color="Autre sexe :",
+       title = "Prénoms : Il y a mixité et mixité.",
+       caption = glue("Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont"),
+       subtitle = "Les prénoms très mixtes (plus de 30% des porteurs ou porteuses sont de l'autre sexe : Dominique) ne couvrent qu'une petite partie des naissances.\nLes prénoms un peu mixtes (pour lesquels seule une très faible proportion des porteurs et porteuses sont de l'autre sexe : Aden, Amal, Ambroise…)\ncouvrent une plus grosse proportion des naissances.") +
+  theme_ipsum( plot_margin = margin(0, 5, 0, 0),
+               plot_title_size = 20,
+               subtitle_size = 9.5,
+               base_size = 12,
+               axis_title_size = 12,
+               axis_text_size = 12,
+               base_family = "Helvetica")  +
+  theme(legend.position=c(.1,.7),
+        plot.title.position ="plot",
+        plot.subtitle = element_text(size=9.2),
+        plot.caption = element_text(size=12),
+        strip.text = element_blank(),
+        panel.spacing.x = unit(0.05, "lines"),
+        panel.spacing.y = unit(0.3, "lines")) 
+```
+
+\newpage
+
+
+
+# Consonnes et voyelles dans les prénoms
+
+La fréquence des voyelles dans les prénoms évolue au cours des [xx]{.smallcaps}^e^ et [xxi]{.smallcaps}^e^ siècles. Les filles reçoivent des prénoms comportant en moyenne un peu plus de voyelles. Mais l'évolution se fait de manière parallèle. Est-ce une manière de distinguer les prénoms des filles des prénoms des garçons ? L'écart (10 points de pourcentage), qui se maintient dans le temps, aurait-il pour origine le fait qu'il faut maintenir la différence (de voyelles) pour maintenir la différence (de genre). Gardons en tête, cependant, que, si l'on enlève le --e final, les différences sont moins fortes.
+
+\
+
+```{r figconsonnes1, fig.width=12,fig.height=8}
+
+# consonnes et voyelles dans les prénoms
+
+# Create character class containing vowels
+library(rebus)
+library(ggforce)
+library(hrbrthemes)
+vowels <- char_class("aeiouyAEIOUY")
+fpn <-  fpn %>% 
+  mutate(preusuel_sans_tiret=gsub("-","",preusuel)) %>%
+  mutate(num_vowels = str_count(preusuel_sans_tiret, vowels)) %>%
+  mutate(preusuel_sans_tiret_sans_e_final = gsub("e$","",preusuel_sans_tiret,ignore.case=T)) %>%
+  mutate(num_vowels_sans_e_final = str_count(preusuel_sans_tiret_sans_e_final, vowels))
+
+
+fpn %>% 
+#  filter(rang<51) %>% 
+  mutate(taille_total = nchar(preusuel_sans_tiret)) %>%
+  mutate(taille_sans_e_final = nchar(preusuel_sans_tiret_sans_e_final)) %>%
+  filter(preusuel != "_PRENOMS_RARES") %>%
+  mutate(sexe = case_when(sexe == "1" ~ "garçons",
+                          TRUE ~ "filles")) %>%
+  group_by(sexe,annais) %>%
+  summarize(`1- En tenant compte de toutes les lettres`=sum(num_vowels*nombre)/sum(taille_total*nombre),
+            `2- En ne tenant pas compte du -e final`=sum(num_vowels_sans_e_final*nombre)/sum(taille_sans_e_final*nombre)) %>%  # il faudrait calculer taille-1|e-final
+  mutate(etiquettes = case_when(annais<1910 & sexe == "garçons" ~ "Michel, Jean…",
+                                annais<1910 & sexe == "filles" ~ "Marie, Jeanne…",
+                                annais>2007 & sexe == "filles" ~ "Louise, Jade",
+                                annais>2007 & sexe == "garçons" ~ "Gabriel, Jules")) %>%
+  filter(!is.na(annais)) %>%
+  pivot_longer(cols=contains("compte")) %>%
+  ggplot(aes(annais,value,group=interaction(sexe,name),color=sexe, linetype=name)) + 
+  geom_mark_ellipse(aes(filter = annais <1910, fill=sexe,label=etiquettes)) +
+  geom_mark_ellipse(aes(filter = annais >2007, fill=sexe,label=etiquettes)) +
+  geom_line(size=2,lineend="round") +
+  scale_y_continuous(label=percent_format(accuracy = 1)) +
+  scale_color_manual(values = c("purple","navyblue")) + 
+  scale_fill_manual(values = c("purple","navyblue")) +  
+#  annotate(x=1905,y=.52,label="Marie",geom="text") +
+
+  expand_limits(y=c(.4,.535),x=c(1897,2026) )+
+  facet_wrap(~name) +
+  labs(title = "Part des voyelles dans les prénoms",
+       y=NULL,x="Année",
+       caption=glue("Lecture : En {annee_max}, environ 53% des lettres des prénoms des filles sont des voyelles.\nSource : Insee, Fichier des prénoms,  édition {annee_max+1}. Réalisation : B. Coulmont."),
+       subtitle = "Les prénoms des garçons ont, en moyenne, moins de voyelles que ceux des filles.\nMais l'évolution est parallèle.") +
+  theme_ipsum(plot_margin = margin(5, 5, 0, 5),
+               base_family = "Helvetica", 
+              plot_title_margin=5 , subtitle_margin=0) +
+  theme(legend.position="none",
+        plot.title.position = "plot") 
+
+
+
+```
+
+\newpage
+
+# Les plus grosses variations
+
+Quelles sont les vingt-cinq plus grosses variations, à la hausse ou à la baisse ?
+
+\
+
+```{r figvariations1}
+
+
+
+# identifier les plus grosses variations entre 2019 et 2020
+# ----------------------------------------------------------
+varia <- fpn %>% filter(annais %in% c(annee_max-1,annee_max)) %>%
+  select(preusuel,sexe,annais,nombre) %>%
+  mutate(annais = case_when(annais==annee_max ~ "fin",
+                            TRUE ~ "debut")) %>%
+  spread(key=annais,value=nombre) %>%
+  mutate(diff= (fin-debut)/fin) %>%
+  filter(fin>200) %>% arrange(-diff) %>%
+  slice_max(order_by=diff,n=25)
+
+fpn %>% 
+  filter(paste(preusuel,sexe) %in% paste(varia$preusuel,varia$sexe)) %>%
+  filter(annais>1979) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  complete(preusuel, nesting(annais), fill = list(nombre = 0)) %>%
+  
+#  filter(preusuel != "SELIM") %>%
+  ggplot(aes(annais,nombre,group=preusuel,color=preusuel)) + geom_line(size=1)  +
+  facet_wrap(~preusuel,scale="free") +
+  theme(legend.position="none") +
+  labs(title=glue("Quelques prénoms ayant le plus augmenté entre {annee_max-1} et {annee_max}"),
+       caption=glue("Source : Fichier des prénoms, INSEE, édition {annee_max+1} Graphique : B. Coulmont"),
+       x=NULL,y=NULL) +
+  theme_ipsum(plot_margin = margin(5, 5, 0, 5), 
+              plot_title_margin=5 , 
+               base_family = "Helvetica", 
+              subtitle_margin=0) +
+  theme(legend.position="none",
+        panel.spacing = unit(1,"line"),
+        plot.title.position = "plot") 
+
+
+```
+
+
+```{r}
+
+# les plus gros gadins
+# --------------------
+# varia <- fpn %>% filter(annais %in% c(annee_max-1,annee_max)) %>%
+#   select(preusuel,sexe,annais,nombre) %>%
+#   mutate(annais = case_when(annais==annee_max ~ "fin",
+#                             TRUE ~ "debut")) %>%
+#   spread(key=annais,value=nombre) %>%
+#   mutate(diff= (fin-debut)/fin) %>%
+#   filter(fin>200) %>% arrange(-diff) %>%
+#   slice_max(order_by=diff,n=25)
+
+varia <- fpn %>% filter(annais %in% c(annee_max-1,annee_max)) %>%
+  select(preusuel,sexe,annais,nombre) %>%
+  mutate(annais = case_when(annais==annee_max ~ "fin",
+                            TRUE ~ "debut")) %>%
+  spread(key=annais,value=nombre) %>%
+  mutate(diff= (fin-debut)/fin) %>%
+  filter(debut>200) %>%  
+  slice_min(order_by=diff,n=25)
+
+fpn %>% filter(paste(preusuel,sexe) %in% paste(varia$preusuel,varia$sexe)) %>%
+  filter(annais>1979) %>%
+    mutate(preusuel = str_to_title(preusuel)) %>%
+  complete(preusuel, nesting(annais), fill = list(nombre = 0)) %>%
+  ggplot(aes(annais,nombre,group=preusuel,color=preusuel)) + geom_line(size=1)  +
+  facet_wrap(~preusuel,scale="free") +
+  theme(legend.position="none") +
+  labs(title=glue("Quelques uns des prénoms ayant le plus diminué entre entre {annee_max-1} et {annee_max}"),
+       caption=glue("Source : Fichier des prénoms, INSEE, édition {annee_max+1}. Graphique : B. Coulmont"),
+       x=NULL,y=NULL) +
+  theme_ipsum(plot_margin = margin(5, 5, 0, 5), 
+              plot_title_margin=5 , 
+               base_family = "Helvetica", 
+              subtitle_margin=0) +
+  theme(legend.position="none",
+        panel.spacing = unit(1,"line"),
+        plot.title.position = "plot") 
+```
+
+
+\newpage
+
+# Kylian
+
+En 2018, l'équipe de France de football remporte la Coupe du monde. Un des joueurs fut particulièrement remarqué, Kylian Mbappé. Son prénom, en déclin depuis le milieu des années 2000, connaît un regain de popularité entre 2017 et 2019 : plusieurs centaines de bébés ont reçu ce prénom (qu'ils n'auraient probablement pas reçu). Les autres variantes du même prénom (Kilian, Kyliann...) ne connaissent pas ce regain.
+
+\
+
+```{r, fig.width=7,fig.height=5}
+
+fpn %>% 
+  filter(grepl("^kyli|^kili|killi|kylly",preusuel,ignore.case = T)) %>%
+  filter(sexe==1) %>%
+  mutate(prénom=case_when(preusuel=="KILIAN"~ "Kilian",
+                          preusuel=="KILLIAN"~ "Killian",
+                          preusuel=="KYLIAN" ~ "Kylian",
+                          preusuel=="KYLIANN" ~ "Kyliann",
+                          TRUE ~ "Autre « kilian »")) %>%
+  group_by(annais,prénom) %>% 
+  summarize(nombre=sum(nombre)) %>%
+  ungroup() %>%
+    mutate(prénom = fct_relevel(prénom,"Kylian","Killian","Kilian","Kyliann","Autre « kilian »")) %>%
+  ggplot(aes(annais,nombre,group=prénom,color=prénom,fill=prénom)) +
+  geom_area(position="identity",alpha=.3) +
+
+  labs(title="Kylian, Killian, Kilian, Kyliann, Kyliane et autres Killiam",
+       subtitle="Nombre annuel de naissances en France",
+       caption=glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont"),
+       y=NULL,x="Année de naissance",fill="Prénom",color="Prénom") +
+  theme_ipsum(plot_margin = margin(10, 10, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(plot.title.position = "plot",
+        legend.position=c(.2,.7) )
+```
+
+
+
+\newpage
+
+# Charlie
+
+Des événements dramatiques peuvent-ils avoir un effet sur les parents ? Il semble ici que l'attentat de janvier 2015 contre *Charlie Hebdo*, et la mémorialisation de cet attentat sous la forme de *Je suis Charlie*, a incité une partie des parents à ne pas donner Charlie à leurs enfants. Ce choc n'a toutefois pas d'effet sur la trajectoire de féminisation de ce prénom.
+
+\
+
+```{r fig.width=12, fig.height=5}
+
+fpn %>% filter(preusuel=="CHARLIE") %>%
+  filter(annais>1999) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles")) %>%
+  ggplot(aes(annais,nombre,group=sexe,fill=sexe)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~sexe,scales="free") +
+  scale_x_continuous(breaks = c(2000,2005,2010,2015,2020),
+                     expand = c(0,0)) +
+  theme_ipsum(plot_margin = margin(5, 5, 0, 5), 
+              base_family="Helvetica",
+              plot_title_margin=5 , 
+              subtitle_margin=0) +
+  
+  theme(legend.position = "none",
+        plot.caption = element_text(size=12),
+        plot.title.position = "plot") +
+  labs(x=NULL,y=NULL,
+       title = "Des Français.es de plus en plus « Charlie »",
+       caption = glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont"),
+       subtitle = glue("Nombre de bébés prénommés Charlie, par année de naissance, 2000-{annee_max}") ) 
+
+```
+
+
+```{r fig.width=10, fig.height=5}
+
+fpn %>% filter(preusuel=="CHARLIE") %>%
+  filter(annais>1983) %>%
+  select(sexe,nombre,preusuel,annais) %>%
+  spread(key=sexe,value=nombre) %>%
+  mutate(proportion_filles=(`2`/`1`)) %>%
+  ggplot(aes(annais,proportion_filles)) +
+  geom_point(color="black",size=.2) +
+  stat_smooth(color="dodgerblue",alpha=.7,size=2,se=F,span=.5,n=2000,geom="line") +
+  scale_y_log10(breaks=c(.1,.25,.33,.5,1,2,3),
+                labels=c("10 fois plus de garçons","4 fois plus de garçons","3 fois plus de garçons","2 fois plus de garçons","égalité","2 fois plus de filles","3 fois plus de filles")) +
+  coord_cartesian(ylim=c(.1,3),xlim=c(1980,NA)) +
+  geom_hline(yintercept=1,size=.2,lty=2) +
+  labs(title="Il était Charlie. Elle est maintenant Charlie",
+       subtitle="Car les Charlie né.e.s récemment sont plutôt des filles",
+       caption=glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont"),
+       x="Année de naissance",y=NULL) +
+  theme_ipsum(plot_margin = margin(10, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(plot.title.position = "plot",
+        plot.caption = element_text(size=12))
+
+
+```
+
+
+\newpage 
+
+# Camille
+
+Camille est un cas très intéressant de féminisation entre 1945 et 2000 puis de renversement de féminisation depuis une vingtaine d'années.
+
+\
+
+```{r figcamille1, fig.width=9, fig.height=7}
+
+
+
+fpn %>% filter(preusuel=="CAMILLE") %>%
+  select(sexe,nombre,preusuel,annais) %>%
+  spread(key=sexe,value=nombre) %>%
+  mutate(proportion_filles=(`2`/`1`)) %>%
+  ggplot(aes(annais,proportion_filles)) +
+  geom_point(color="black",size=.2) +
+  stat_smooth(color="dodgerblue",alpha=.7,size=2,se=F,span=.3,n=2000,geom="line") +
+  scale_y_log10(breaks=c(.33,.5,1,2,3,7,15),
+                labels=c("3 fois plus de garçons","2 fois plus de garçons","Egalité",
+                         "2 fois plus de filles","3 fois plus de filles","7 fois plus de filles",
+                         "15 fois plus de filles")) +
+  coord_cartesian(ylim=c(.33,17)) +
+  geom_hline(yintercept = 1,lty=2) +
+  labs(title="Des Camille de plus en plus garçons",
+       subtitle="La féminisation d'un prénom est parfois renversée",
+       caption=glue("Source : Insee, Fichier des prénoms, {annee_max+1}. Graphique : B. Coulmont"),
+       x="Année de naissance",y=NULL) +
+  theme_ipsum(plot_margin = margin(10, 10, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(plot.title.position="plot",
+        plot.caption = element_text(size=12))
+```
+
+
+
+\newpage 
+
+# La taille des prénoms
+
+La taille des prénoms (leur nombre de lettres) diminue depuis 1950... Cela a commencé par les prénoms de 10 lettres et plus, puis par ceux de 9 lettres, 8 lettres (à partir de 1960) puis 7 et 6 lettres (au milieu des années 60). Mais cela ne se fait pas au profit de prénoms de 2 ou 3 lettres, qui ne nomment qu'une petite partie des naissances. Ce sont les prénoms de 4 et 5 lettres qui couvrent désormais la majorité des naissances.
+
+\
+
+```{r figtaille1, fig.width=8, fig.height=6}
+
+
+
+# Le nombre de lettres des prénoms
+# --------------------------------
+tmp <- fpn %>%
+  mutate(sexe=ifelse(sexe==1,"garçons","filles")) %>%
+  filter(preusuel != "_PRENOMS_RARES") %>%
+  #mutate(taille_classe = cut(taille,breaks=c(0,4,7,10,30))) %>%
+  mutate(taille_classe=case_when(taille>10 ~ 10,
+                                 taille<3 ~ 3,
+                                 TRUE ~ as.double(taille))) %>%
+  group_by(annais,sexe,taille_classe) %>% summarize(N=sum(nombre)) %>%
+  group_by(annais,sexe) %>% mutate(p=N/sum(N)) %>%
+  ungroup() %>%
+  mutate(taille_classe_label = paste(taille_classe, "lettres", sep=" ")) %>%
+  mutate(taille_classe_label = fct_reorder(taille_classe_label,taille_classe))
+
+tmp %>% ggplot(aes(annais,p,group=fct_reorder(taille_classe_label,taille_classe),fill=taille_classe_label)) +
+  geom_area(position="identity",alpha=.7) +
+  scale_y_continuous(labels=percent) +
+  scale_x_continuous(breaks=c(1900,1950,2000)) +
+  scale_fill_viridis_d() +
+  facet_wrap(~sexe+taille_classe_label,nrow=2) +
+  theme_minimal() +
+  labs(y=NULL,x=NULL,
+       title="Proportion des bébés recevant un prénom de telle ou telle taille",
+       subtitle="Les prénoms de moins de 5 lettres sont de plus en plus fréquents. Les prénoms de 6 lettres ou plus nomment de moins en moins de bébés.",
+       caption=glue("Source : Insee. Fichier des prénoms {annee_max+1}. Calculs : B. Coulmont. Lecture : En 2017, 30% des bébés garçons ont reçu un prénom de 5 lettres.")) +
+  theme(legend.position = "none",
+        plot.title.position = "plot",
+        plot.subtitle = element_text(size=8)) 
+
+
+```
+
+\newpage
+
+# Rapprochement de la structure des prénoms
+
+Alors que la proportion de voyelles distingue encore les prénoms des garçons des prénoms des filles, le nombre de lettres n'est plus le support d'une telle différence. Filles comme garçons reçoivent, dans des proportions équivalentes, désormais, des prénoms de 4, 5 ou 6 lettres.
+
+\   
+
+
+```{r}
+
+### rapprochement du nombre de lettres
+### entre prénoms des filles et prénoms des garçons
+### avec un "hack" pour geom_area
+###
+
+
+
+variations <- fpn %>%
+  filter(preusuel !="_PRENOMS_RARES") %>%
+  mutate(taille = ifelse(taille > 10,11,taille)) %>%
+  group_by(sexe,annais,taille) %>%
+  summarize(total = sum(nombre)) %>%
+  group_by(sexe,annais) %>%
+  mutate(p = total/sum(total)) %>%
+  filter(taille>2,taille<14) %>%
+  select(-total) %>%
+  spread(key=sexe,value=p) %>%
+  mutate(diff = 100*(`1`-`2`)) 
+
+intersection <- variations %>%
+  group_by(taille) %>%
+  mutate(sign_change = diff/lead(diff) < 0) %>% 
+  filter(sign_change == TRUE) %>% 
+  mutate(annais = annais + 1, 
+         Positive = 0, 
+         Negative = 0) %>% 
+  select(-sign_change)
+
+nombre_lettres <- variations %>%
+  mutate(Positive = ifelse(diff >= 0, diff, 0),
+         Negative = ifelse(diff < 0, diff, 0)) %>%
+  bind_rows(intersection) %>%
+  select(annais,taille,diff,Positive,Negative) %>%
+  gather(Signe, diff, -annais, -diff, -taille)
+
+annotations <- tribble(~annais,~diff,~taille,~commentaire,
+                       1910, 15, 4, "Les garçons avaient plus souvent\ndes prénoms de 4 lettres.",
+                       1910, 15, 6, "Les garçons avaient plus souvent\ndes prénoms de 6 lettres.",
+                       1910, -10, 8, "Les filles avaient plus souvent\ndes prénoms de 8 lettres.",
+                       1910,-10, 9, "Les filles avaient plus souvent\ndes prénoms de 9 lettres.")
+
+nombre_lettres <- nombre_lettres %>% 
+  left_join(annotations,by=c("annais","taille")) %>%
+  mutate(taille_label = paste(taille,"lettres")) %>%
+  mutate(taille_label = fct_reorder(taille_label,taille))
+
+
+nombre_lettres %>% 
+  ggplot(aes(x = annais, y = diff.x)) +
+  geom_area(aes(fill = Signe), show.legend = FALSE, position = "identity",alpha=.7) +
+  scale_x_continuous(expand=expansion(add=c(1,1))) +
+  geom_text(aes(y=diff.y, label=commentaire),adj=0,size=3) +
+  scale_fill_manual(values=c("firebrick1","deepskyblue")) +
+  facet_wrap(~taille_label) +
+  labs(title = "Rapprochement de la structure des prénoms masculins et féminins, en fonction du nombre de lettres du prénom",
+       subtitle = "Aujourd'hui, le nombre de lettres est en moyenne très proche. Garçons et filles ont des prénoms de même taille.",
+       caption = glue("Source : Insee, Fichier des prénoms {annee_max+1}. Réalisation : B. Coulmont."),
+       x=NULL,y=NULL) +
+  theme_ipsum(plot_margin = margin(5, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(plot.title.position = "plot",
+        plot.caption = element_text(size=12),
+        panel.spacing = unit(.5,"line"))
+```
+
+\newpage
+
+
+# Les prénoms nouveaux : nombre annuel et exemples
+
+
+```{r}
+
+
+
+####
+# nombre de prénoms nouveaux introduits chaque année dans le Fichier des prénoms
+#
+#
+
+tmp <- fpn %>% filter(!is.na(annais)) %>%
+  group_by(preusuel) %>%
+  mutate(annee_introduction = min(annais)) %>%
+  select(sexe,preusuel,annee_introduction) %>%
+  dplyr::distinct(sexe,preusuel,annee_introduction) %>%
+  filter(annee_introduction>1900) %>%
+  filter(annee_introduction>1915,annee_introduction< (annee_max-10))
+
+
+liste_aleatoire_prenom_nouveau <- tmp %>%
+  group_by(annee_introduction) %>%
+  sample_n(1)
+
+
+exemples <- liste_aleatoire_prenom_nouveau %>% 
+  ungroup() %>%
+  filter(annee_introduction %in% c(2005:2010)) %>% select(preusuel) %>%
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  dplyr::pull() %>%
+  paste0(collapse=", ") 
+
+```
+
+
+Pour protéger la vie privée, l'Insee ne diffuse pas les « prénoms rares », en gros ceux qui ne sont donnés qu'une ou deux fois par an. Cela ne peut que conduire à sous-estimer le nombre de prénoms en circulation, et aussi le nombre de nouveaux prénoms donnés chaque année aux enfants.
+
+Malgré cela, voici une proposition graphique. Les nouveaux prénoms sont soit des prénoms lié à l'immigration, soit des variations orthographiques (des *y* qui remplacent des *i*, par exemple). Vers 2007, les prénoms suivants apparaissent dans le *Fichier des prénoms* : `r exemples`.
+
+\
+
+```{r, fig.width=8.5, fig.height=6}
+
+nombre_annuel_nouveaux_prenoms <- tmp %>%  
+  group_by(annee_introduction) %>%
+  summarize(N=n()) %>% ungroup()
+
+liste_aleatoire_prenom_nouveau <- liste_aleatoire_prenom_nouveau %>%
+  left_join(nombre_annuel_nouveaux_prenoms,by=c("annee_introduction"))
+
+liste_aleatoire_prenom_nouveau %>%
+  ggplot(aes(annee_introduction,N)) +
+  geom_point(size=.1,color="gray") + 
+  geom_smooth(size=1,se=F,span=.3,color="lightblue",n=2000) +
+  scale_y_continuous(limits=c(0,800)) +
+  geom_text_repel(aes(label=preusuel),size=2) +
+  theme_ipsum(plot_margin = margin(0, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 14,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  annotate(geom="text",1930,750,adj=0,
+           label="Vers 2005, presque 800 nouveaux prénoms sont\napparus dans le Fichier des prénoms") +
+  labs(title="Nombre de prénoms nouveaux ajoutés chaque année dans le Fichier des prénoms",
+       subtitle="Avec quelques exemples de prénoms aléatoirement sélectionnés (comme Sandrine, introduit en 1947).",
+       caption=glue("Source : Insee, Fichier des prénoms {annee_max+1}. Graphique : B. Coulmont"),
+       y=NULL,x=NULL) +
+  theme_ipsum(plot_margin = margin(5, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(plot.title.position = "plot",
+        plot.caption = element_text(size=12))
+```
+
+
+
+# À l'échelle des départements : les prénoms les plus fréquents en `r annee_max`
+
+
+```{r, fig.width=6, fig.height=8}
+
+
+top_dep <- fpd %>%
+  filter(annais==2020) %>%
+  filter(preusuel !="_PRENOMS_RARES") %>%
+  group_by(dpt,sexe) %>%
+  mutate(rang = rank(-nombre,ties.method = "random")) %>%
+  filter(rang==1)
+
+top_dep <- top_dep %>%
+  select(dpt,preusuel,sexe) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles") ) %>%
+  pivot_wider(names_from=sexe, values_from = preusuel)
+
+
+
+
+
+departements_dom_points <- departements_dom %>%
+  left_join(top_dep, by = c("INSEE_DEP"="dpt")) %>%
+  st_centroid()
+
+departements_dom_points <- departements_dom_points %>%
+  pivot_longer(cols = c("Garçons","Filles")) %>%
+  mutate(value = str_to_title(value)) %>%
+  group_by(name) %>%
+  mutate(value_lump = fct_lump_n(value,4, other_level = "Autre prénom")) %>%
+  mutate(value_lump = fct_explicit_na(value_lump, "Autre prénom"))
+
+departements_dom_gf <- bind_rows(departements_dom %>% mutate(name = "Garçons"),
+                                 departements_dom %>% mutate(name = "Filles"))
+
+ggplot(data=departements_dom_points) +
+  geom_sf(data = departements_dom_gf,size=.1, color="black",fill="white") +
+  geom_sf_label_repel(data = departements_dom_points,
+               aes(label = value, color = value_lump),
+               size=2,fontface="bold",
+               label.padding = unit(0.05, "lines"),
+               label.r = unit(0.15, "lines"),
+               label.size = NA,
+               force=0.1,force_pull=10,
+               point.padding = unit(0,"lines"),
+               box.padding = unit(0,"lines")) +
+  facet_wrap(~name, ncol = 1) +
+  coord_sf(datum = NA) +
+#    scale_color_brewer(type="qual", palette = "Set3") +
+  scale_y_continuous(expand = expansion(mult=0,add=0))+
+  scale_x_continuous(expand = expansion(mult=0,add=0)) +
+   theme_ipsum(plot_margin = margin(5, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  labs(x=NULL,y=NULL,
+       #title = glue("Prénom le plus donné en {annee_max}"),
+       caption=glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont")  ) +
+  theme(legend.position = "none")
+
+
+```
+
+\newpage
+
+
+# Exemples de prénoms sur-représentés dans certains départements
+
+```{r}
+# prénom "spécifique" (surreprésenté)
+
+prenoms_departements <- fpd %>%
+  filter(annais %in% c(annee_max-5,annee_max)) %>%
+  group_by(dpt,sexe,preusuel) %>%
+  summarize(nombre=sum(nombre)) %>%
+  group_by(dpt,sexe) %>%
+  mutate(p = nombre/sum(nombre))
+
+prenom_national <- fpn %>%
+  filter(annais %in% c(annee_max-5,annee_max)) %>%
+  group_by(sexe,preusuel) %>%
+  summarize(nombre=sum(nombre)) %>%
+  group_by(sexe) %>%
+  mutate(p = nombre/sum(nombre))
+
+
+prenoms_specifiques <- prenoms_departements %>%
+  left_join(prenom_national, by = c("sexe","preusuel")) %>%
+  filter(preusuel!="_PRENOMS_RARES") %>%
+  filter(nombre.x > 20) %>%
+  mutate(surrep = p.x/p.y) %>%
+  group_by(dpt,sexe) %>%
+  mutate(rang = rank(-surrep)) %>%
+  filter(rang ==1) %>% ungroup()
+
+exemple <- prenoms_specifiques %>% filter(dpt=="75") %>% 
+  select(preusuel) %>% 
+  mutate(preusuel = str_to_title(preusuel)) %>%
+  dplyr::pull() %>%
+  paste0(collapse=" ou ") 
+
+prenoms_specifiques <- prenoms_specifiques %>%
+  select(dpt,preusuel,sexe) %>%
+  mutate(sexe = ifelse(sexe==1,"Garçons","Filles") ) %>%
+  pivot_wider(names_from=sexe, values_from = preusuel) %>%
+  ungroup()
+
+
+
+```
+
+Certains prénoms sont sur-représentés dans certains départements, par exemple `r exemple ` à Paris. Ce sont des prénoms rares voire très rares, mais plus fréquents localement que dans le reste de la France.
+
+```{r, fig.width=5.5, fig.height=7}
+
+
+
+departements_dom_points <- departements_dom %>%
+  left_join(prenoms_specifiques, by = c("INSEE_DEP"="dpt")) %>%
+  st_centroid()
+
+departements_dom_points <- departements_dom_points %>%
+  pivot_longer(cols = c("Garçons","Filles")) %>%
+  mutate(value = str_to_title(value)) 
+
+departements_dom_gf <- bind_rows(departements_dom %>% mutate(name = "Garçons"),
+                                 departements_dom %>% mutate(name = "Filles"))
+
+ggplot(data=departements_dom_points) +
+  geom_sf(data = departements_dom_gf,size=.1, color="black",fill="white") +
+  geom_sf_label_repel(data = departements_dom_points,
+                      aes(label = value, color = name),
+                      size=1.5,fontface="bold",
+                      label.padding = unit(0.01, "lines"),
+                      label.r = unit(0.15, "lines"),
+                      label.size = NA,
+                      force=0.01,force_pull=10,
+                      point.padding = unit(0,"lines"),
+                      box.padding = unit(0,"lines")) +
+  scale_color_manual(values = c("firebrick1","dodgerblue")) +
+  facet_wrap(~name, ncol = 1) +
+  coord_sf(datum = NA) +
+  #    scale_color_brewer(type="qual", palette = "Set3") +
+  scale_y_continuous(expand = expansion(mult=0,add=0))+
+  scale_x_continuous(expand = expansion(mult=0,add=0)) +
+  theme_ipsum(plot_margin = margin(5, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  labs(x=NULL,y=NULL,
+       #title = glue("Prénom le plus donné en {annee_max}"),
+       caption=glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont")  ) +
+  theme(legend.position = "none",
+        panel.spacing.y =  unit(0, "lines"))
+
+#ggsave("~/Desktop/testeffacer.pdf",width=4.5,height=7)
+```
+
+
+# Le palmarès des prénoms varie-t-il suivant les départements ?
+
+Le graphique suivant est peut-être un peu complexe. Il est basé sur le « top 80 national » (les 40 prénoms masculins les plus donnés et les 40 prénoms féminins les plus donnés). J'indique dans le graphique le nombre de prénoms du « top 80 départemental » qui ne sont pas dans le « top 80 national », une manière de repérer des différences départementales (pour quelques gros départements). Dans les années 1970, entre 7 et 15 prénoms diffèrent (entre 65 et 73 prénoms sont communs au top national et au top départemental). On remarque une tendance à la dispersion depuis le début des années 1980. 
+
+Aujourd'hui, les prénoms fréquents en Seine-Saint-Denis et à Paris diffèrent des prénoms du top national. Il faut garder à l'esprit que, en raison de la dispersion croissante des choix, le « top 80 » d'aujourd'hui couvre une proportion bien plus faible des naissances qu'en 1980.
+
+
+\
+
+```{r, fig.width=8.5, fig.height=6}
+
+## - seine saint denis
+## prénoms différents du top 80 national
+
+
+fpd_68 <- fpd %>% filter(annais>1967) %>% ungroup()
+
+topnat <- fpd_68 %>% group_by(sexe,preusuel,annais) %>% summarize(nombre=sum(nombre)) %>% ungroup()
+topnat <- topnat %>% group_by(sexe,annais) %>% mutate(p=nombre/sum(nombre))
+topnat <- topnat %>% filter(preusuel!="_PRENOMS_RARES")
+topnat <- topnat %>% group_by(sexe,annais) %>% mutate(rang=rank(-nombre,ties.method="random"))
+
+fpd_68 <- fpd_68 %>%ungroup() %>% mutate(dpt = ifelse(dpt %in% c("29","22","56","35"),"bretagne",dpt)) %>%
+  group_by(dpt,sexe,preusuel,annais) %>% summarize(nombre=sum(nombre))
+fpd_68 <- fpd_68 %>% group_by(dpt,sexe,annais) %>% mutate(p=nombre/sum(nombre))
+fpd_68 <- fpd_68 %>% filter(preusuel!="_PRENOMS_RARES")
+fpd_68 <- fpd_68 %>% group_by(dpt,sexe,annais) %>% mutate(rang=rank(-nombre,ties.method="random"))
+
+fpd_68 <- fpd_68 %>% left_join(topnat,by=c("rang"="rang","annais"="annais","sexe"="sexe")) %>% ungroup()
+
+
+big <- fpd_68 %>% ungroup() %>% filter(rang<41) %>% select(annais,sexe,dpt,rang,preusuel.x,preusuel.y)
+big <- big %>% group_by(annais,dpt) %>% mutate(present = `preusuel.x` %in% paste(`preusuel.y`))
+big <- big %>% group_by(annais,dpt) %>% summarize(N=sum(!present))
+big <- big %>% filter(dpt %in% c("75","93","92","59","69","13"))%>% ungroup()
+
+ssd <- fpd_68 %>% ungroup() %>% filter(rang<41,dpt=="93",annais==annee_max) %>% 
+  select(annais,sexe,dpt,rang,preusuel.x,preusuel.y)
+ssd <- ssd %>% group_by(annais,dpt) %>% mutate(present = `preusuel.x` %in% paste(`preusuel.y`))
+ssd <- ssd %>% mutate(preusuel.x=str_to_title(preusuel.x))
+
+
+big <- big %>% mutate(departement = recode_factor(dpt,"75"="Paris","93"="Seine-Saint-Denis","92"="Hauts de Seine","59"="Nord (Lille)","69"="Rhône (Lyon)","13"="Bouches du Rhône\n(Marseille)"))
+
+big %>% #filter(dpt!="93",annais<1982) %>%
+  ggplot(aes(annais,N,
+             group=departement,
+             color=departement)) + geom_line(size=.1) + 
+  geom_smooth(se=F,span=.7) +
+  #  theme_tufte(base_family="sans") +
+  scale_y_continuous(expand=expansion(mult=c(.01,.02))) +
+  coord_cartesian(xlim=c(1967,2020),ylim=c(0,NA)) +
+  labs(x="Année de naissance",y=NULL,
+       title="Nombre de prénoms du « top 80 départemental » différents du « top 80 » national",
+       color="Département",
+       caption=glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique B. Coulmont"))  +
+  #theme_a() +
+  theme_ipsum(plot_margin = margin(5, 0, 0, 0),
+              plot_title_margin=5 ,
+              subtitle_margin=2,
+              plot_title_size = 15,
+              subtitle_size = 11,
+              base_family = "Helvetica") +
+  theme(legend.position=c(.1,.7),
+        plot.caption = element_text(size=12),
+        plot.title.position = "plot")
+```
+
+# Les prénoms en Seine-Saint-Denis
+
+
+En complément du précédent graphique, cette liste des prénoms fréquents en Seine-Saint-Denis.
+
+\
+
+```{r, fig.width=5, fig.height=6}
+
+ssd %>% 
+  #mutate(present = as.numeric(present)) %>%
+  ggplot(aes(sexe,rang,label=preusuel.x,color=present,adj=present)) + 
+  geom_text(size=3.3,fontface = "bold") +
+  scale_color_manual(values=c("red","purple")) +
+  scale_y_reverse(breaks=c(1,10,20,30,40),expand=expansion(add=c(.9,.6))) +
+  scale_x_discrete(breaks=c(1,2),labels=c("Garçons","Filles")) +
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(face="bold",hjust=0),
+        axis.text = element_text(face="bold")) +
+  labs(title=glue("Palmarès des prénoms en Seine-Saint-Denis en {annee_max}."),
+  subtitle="En rouge, les prénoms qui ne sont pas dans le top 80 national",
+       y="Rang du prénom",x=NULL,
+       caption = glue("Source : Insee, Fichier des prénoms, édition {annee_max+1}. Graphique : B. Coulmont") ) +
+  theme(legend.position="none",
+        plot.title.position = "plot")
+```
+
+\newpage
+
+
+
+# Conclusions
+
+Ce document a été composé avec le logiciel ``R``, le `r format(Sys.time(), '%d %B %Y à %H heures et %M minutes')`, à partir du *Fichier des prénoms* (édition `r annee_max+1`), de manière semi-automatisée. C'est un document ```.rmd``` qui est transformé en \LaTeX à l'aide de ```pandoc``` puis compilé en ```pdf```. La mise en page (couverture, etc…) est contrôlée par un *template* nommé ```eisvogel```.
+
+
+Si les choses sont bien comme il faut, le programme permettant de générer ce document est disponible sur ``github.com/coulmont/``. Il faudra néanmoins télécharger les données sur le site de l'Insee et le templace ```eisvogel``` ailleurs.
+
+
+
